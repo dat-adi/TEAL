@@ -328,8 +328,30 @@ def _load_model(checkpoint_path, device, precision, use_tp, hist_path, sparsity)
     if hist_path is not None:
         device = model.layers[0].feed_forward.w1.weight.device.type
         for layer_idx, layer in enumerate(model.layers):
-            monkeypatch_layer(layer_idx, layer, sparsity, hist_path, device)     
+            monkeypatch_layer(layer_idx, layer, sparsity, hist_path, device)
+            # the monkeypatch updates and applies the gemv kernels on the existing ffn matrices.
+            # we want to retrieve the matrices after the sparsification.
+            # I may be incorrect in a few assumptions:
+            # 1. We need to retrieve the matrices at every layer.
+            # 2. There is no difference in retrieving the matrices at the granular 
+            # TransformerBlock file or here after the monkeypatch application.
+            # If there is a difference, we want to implement the matrix retrieval
+            # somewhere here instead: https://github.com/FasterDecoding/TEAL/blob/fb7373c93ac3594817c9ee64d4e08b47430a1822/gpt-fast/model.py#L259
+            # 3. This architecture has three linear layers, i.e. three matrices that are multiplied. https://github.com/FasterDecoding/TEAL/blob/fb7373c93ac3594817c9ee64d4e08b47430a1822/gpt-fast/model.py#L277
+            # This is different from Deja Vu, so we should store all three matrices: A B and C?
 
+            import uuid # put this here temporarily to show condensed code
+            wid = str(uuid.uuid4())
+            # The multiplication for each layer is of the format: C*(B*A)
+            torch.save(layer.feed_forward.w1.detach().clone(), "A_matrix_" + wid + ".pt") # inner multiplication
+
+            # TODO: Not sure where to perform the next lines. Which matrix do I perform it on?
+            # row_zeros = torch.zeros(1, 8192, device='cuda').bool().half()
+            # final_padded = torch.cat([self._mask, row_zeros], dim=0)
+            torch.save(layer.feed_forward.w3.detach().clone(), "B_matrix_" + wid + ".pt") # inner multiplication
+            torch.save(layer.feed_forward.w2.detach().clone(), "C_matrix_" + wid + ".pt")
+
+            #np.save('B_matrix_' + wid + '.npy', (self.fc2.weight.data.T * final_padded).cpu().numpy())
 
     return model.eval()
 
