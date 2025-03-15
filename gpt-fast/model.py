@@ -137,6 +137,46 @@ class Transformer(nn.Module):
         x = self.tok_embeddings(idx)
 
         for i, layer in enumerate(self.layers):
+            # Adithya: Stats collection
+            x = layer.feed_forward.x.weight.data
+            x_total = x.numel()
+            x_non_zeros = torch.count_nonzero(x)
+            x_num_zeros = x_total - x_non_zeros
+
+            w1 = layer.feed_forward.w1.weight.data
+            w1_total = w1.numel()
+            w1_non_zeros = torch.count_nonzero(w1)
+            w1_num_zeros = w1_total - w1_non_zeros
+
+            w3 = layer.feed_forward.w3.weight.data
+            w3_total = w3.numel()
+            w3_non_zeros = torch.count_nonzero(w3)
+            w3_num_zeros = w3_total - w3_non_zeros
+
+            w2 = layer.feed_forward.w2.weight.data
+            w2_total = w2.numel()
+            w2_non_zeros = torch.count_nonzero(w2)
+            w2_num_zeros = w2_total - w2_non_zeros
+
+            wqkv = layer.attention.wqkv.weight.data
+            wqkv_total = wqkv.numel()
+            wqkv_non_zeros = torch.count_nonzero(wqkv)
+            wqkv_num_zeros = wqkv_total - wqkv_non_zeros
+
+            wo = layer.attention.wo.weight.data
+            wo_total = wo.numel()
+            wo_non_zeros = torch.count_nonzero(wo)
+            wo_num_zeros = wo_total - wo_non_zeros
+            # Adithya: Stats collection end
+
+            print(
+                f"{i},"
+                f"{x_num_zeros}/{x_total},"
+                f"{w1_num_zeros}/{w1_total},{w3_num_zeros}/{w3_total},"
+                f"{w2_num_zeros}/{w2_total},{wqkv_num_zeros}/{wqkv_total},"
+                f"{wo_num_zeros}/{wo_total}"
+            )
+
             x = layer(x, input_pos, freqs_cis, mask)
         x = self.norm(x)
         logits = self.output(x)
