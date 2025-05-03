@@ -208,6 +208,7 @@ def generate(
             next_token = next_tokens[-1]
     else:
         generated_tokens, _ = decode_n_tokens(model, next_token.view(1, -1), input_pos, max_new_tokens - 1, callback=callback, **sampling_kwargs)
+
         seq[T + 1:] = torch.cat(generated_tokens)
 
     generate_stats = {
@@ -315,40 +316,6 @@ def _load_model(checkpoint_path, device, precision, use_tp, hist_path, sparsity)
         layer.attention.sparsity_bin = 0
         layer.attention.wo.weight.data = layer.attention.wo.weight.data.T.contiguous().T # column major
 
-        # # Adithya: Stats collection
-        # w1 = layer.feed_forward.w1.weight.data
-        # w1_total = w1.numel()
-        # w1_non_zeros = torch.count_nonzero(w1)
-        # w1_num_zeros = w1_total - w1_non_zeros
-
-        # w3 = layer.feed_forward.w3.weight.data
-        # w3_total = w3.numel()
-        # w3_non_zeros = torch.count_nonzero(w3)
-        # w3_num_zeros = w3_total - w3_non_zeros
-
-        # w2 = layer.feed_forward.w2.weight.data
-        # w2_total = w2.numel()
-        # w2_non_zeros = torch.count_nonzero(w2)
-        # w2_num_zeros = w2_total - w2_non_zeros
-
-        # wqkv = layer.attention.wqkv.weight.data
-        # wqkv_total = wqkv.numel()
-        # wqkv_non_zeros = torch.count_nonzero(wqkv)
-        # wqkv_num_zeros = wqkv_total - wqkv_non_zeros
-
-        # wo = layer.attention.wo.weight.data
-        # wo_total = wo.numel()
-        # wo_non_zeros = torch.count_nonzero(wo)
-        # wo_num_zeros = wo_total - wo_non_zeros
-        # # Adithya: Stats collection end
-
-        # print(
-        #     f"{layer_idx},"
-        #     f"{w1_num_zeros}/{w1_total},{w3_num_zeros}/{w3_total},"
-        #     f"{w2_num_zeros}/{w2_total},{wqkv_num_zeros}/{wqkv_total},"
-        #     f"{wo_num_zeros}/{wo_total}"
-        # )
-
         # replace forwards
         layer.feed_forward.apply_monkeypatch()
         layer.attention.apply_monkeypatch()
@@ -356,35 +323,11 @@ def _load_model(checkpoint_path, device, precision, use_tp, hist_path, sparsity)
         torch.cuda.empty_cache()
 
     print("Monkeypatching with activation sparsity...")
-    print(model.layers[0].feed_forward.w1.weight.data.shape)
     from tp import _get_rank
     if hist_path is not None:
         device = model.layers[0].feed_forward.w1.weight.device.type
         for layer_idx, layer in enumerate(model.layers):
             monkeypatch_layer(layer_idx, layer, sparsity, hist_path, device)
-            # the monkeypatch updates and applies the gemv kernels on the existing ffn matrices.
-            # we want to retrieve the matrices after the sparsification.
-            # I may be incorrect in a few assumptions:
-            # 1. We need to retrieve the matrices at every layer.
-            # 2. There is no difference in retrieving the matrices at the granular 
-            # TransformerBlock file or here after the monkeypatch application.
-            # If there is a difference, we want to implement the matrix retrieval
-            # somewhere here instead: https://github.com/FasterDecoding/TEAL/blob/fb7373c93ac3594817c9ee64d4e08b47430a1822/gpt-fast/model.py#L259
-            # 3. This architecture has three linear layers, i.e. three matrices that are multiplied. https://github.com/FasterDecoding/TEAL/blob/fb7373c93ac3594817c9ee64d4e08b47430a1822/gpt-fast/model.py#L277
-            # This is different from Deja Vu, so we should store all three matrices: A B and C?
-
-            # import uuid # put this here temporarily to show condensed code
-            # wid = str(uuid.uuid4())
-            # The multiplication for each layer is of the format: C*(B*A)
-            # torch.save(layer.feed_forward.w1.weight.detach().clone(), f"A_matrix_{layer_idx}_{wid}.pt") # inner multiplication
-
-            # TODO: Not sure where to perform the next lines. Which matrix do I perform it on?
-            # row_zeros = torch.zeros(1, 8192, device='cuda').bool().half()
-            # final_padded = torch.cat([self._mask, row_zeros], dim=0)
-            # torch.save(layer.feed_forward.w3.weight.detach().clone(), f"B_matrix_{layer_idx}_{wid}.pt") # inner multiplication
-            # torch.save(layer.feed_forward.w2.weight.detach().clone(), f"C_matrix_{layer_idx}_{wid}.pt")
-
-            #np.save('B_matrix_' + wid + '.npy', (self.fc2.weight.data.T * final_padded).cpu().numpy())
 
     return model.eval()
 

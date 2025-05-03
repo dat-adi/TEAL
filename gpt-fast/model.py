@@ -78,6 +78,28 @@ transformer_configs = {
     "llama-3-70b": dict(block_size=8192, n_layer=80, n_head=64, n_local_heads=8, dim=8192, intermediate_size=28672, vocab_size=128256, rope_base=500000),
 }
 
+def simulate_splitk(X, A, threshold, uuid):
+    """Simulates the splitk gemv1 kernel"""
+
+    N, Z = A.shape
+    beam_width, seq_len, _ = X.shape
+
+    Y = torch.empty(beam_width, seq_len, N, device=X.device, dtype=torch.float16)
+    mask = (X.abs() > threshold).float()
+    masked = (X * mask).to(dtype=torch.float16)
+    if seq_len == 1:
+        for i in range(mask.shape[1]):
+            masked_A = A * masked[0, i]
+            torch.save(masked_A, f"vector_matrix_prune_{uuid}.pt")
+            Y[0, i] = masked_A.T.sum(axis=0)
+    else:
+        for i in range(mask.shape[1]):
+            masked_A = A * X[0, i]
+            Y[0, i] = masked_A.T.sum(axis=0)
+
+    return Y
+
+
 class KVCache(nn.Module):
     def __init__(self, max_batch_size, max_seq_length, n_heads, head_dim, dtype=torch.float16):
         super().__init__()
@@ -137,46 +159,6 @@ class Transformer(nn.Module):
         x = self.tok_embeddings(idx)
 
         for i, layer in enumerate(self.layers):
-            # Adithya: Stats collection
-            x = layer.feed_forward.x.weight.data
-            x_total = x.numel()
-            x_non_zeros = torch.count_nonzero(x)
-            x_num_zeros = x_total - x_non_zeros
-
-            w1 = layer.feed_forward.w1.weight.data
-            w1_total = w1.numel()
-            w1_non_zeros = torch.count_nonzero(w1)
-            w1_num_zeros = w1_total - w1_non_zeros
-
-            w3 = layer.feed_forward.w3.weight.data
-            w3_total = w3.numel()
-            w3_non_zeros = torch.count_nonzero(w3)
-            w3_num_zeros = w3_total - w3_non_zeros
-
-            w2 = layer.feed_forward.w2.weight.data
-            w2_total = w2.numel()
-            w2_non_zeros = torch.count_nonzero(w2)
-            w2_num_zeros = w2_total - w2_non_zeros
-
-            wqkv = layer.attention.wqkv.weight.data
-            wqkv_total = wqkv.numel()
-            wqkv_non_zeros = torch.count_nonzero(wqkv)
-            wqkv_num_zeros = wqkv_total - wqkv_non_zeros
-
-            wo = layer.attention.wo.weight.data
-            wo_total = wo.numel()
-            wo_non_zeros = torch.count_nonzero(wo)
-            wo_num_zeros = wo_total - wo_non_zeros
-            # Adithya: Stats collection end
-
-            print(
-                f"{i},"
-                f"{x_num_zeros}/{x_total},"
-                f"{w1_num_zeros}/{w1_total},{w3_num_zeros}/{w3_total},"
-                f"{w2_num_zeros}/{w2_total},{wqkv_num_zeros}/{wqkv_total},"
-                f"{wo_num_zeros}/{wo_total}"
-            )
-
             x = layer(x, input_pos, freqs_cis, mask)
         x = self.norm(x)
         logits = self.output(x)
@@ -201,11 +183,24 @@ class TransformerBlock(nn.Module):
         return out
 
 def _new_attn_forward(self, x: Tensor, freqs_cis: Tensor, mask: Tensor, input_pos: Optional[Tensor] = None) -> Tensor:
+    import uuid
+    layer_uuid = str(uuid.uuid4())
+    print(layer_uuid)
     bsz, seqlen, _ = x.shape
 
     kv_size = self.n_local_heads * self.head_dim
+    N, Z = self.wqkv.weight.shape
+    beam_width, seq_len, _ = x.shape
 
-    q,k,v = self.gemv1(x, self.wqkv.weight, self.thresh_q, self.thresh_k, self.thresh_v, self.sparsity_bin, kv_size).split([self.dim, kv_size, kv_size], dim=-1) # prefill logic taken care of in gemv
+    out = torch.empty(beam_width, seq_len, N, device=x.device, dtype=torch.float16)
+
+    # self.wqkv needs to be split horizontally into three parts.
+    q0, k0, v0 = self.wqkv.weight.split(kv_size)
+    q = simulate_splitk(x, q0, self.thresh_q, layer_uuid + "q0")
+    k = simulate_splitk(x, k0, self.thresh_k, layer_uuid + "k0")
+    v = simulate_splitk(x, v0, self.thresh_v, layer_uuid + "v0")
+
+    # q,k,v = self.gemv1(x, self.wqkv.weight, self.thresh_q, self.thresh_k, self.thresh_v, self.sparsity_bin, kv_size).split([self.dim, kv_size, kv_size], dim=-1) # prefill logic taken care of in gemv
 
     q = q.view(bsz, seqlen, self.n_head, self.head_dim)
     k = k.view(bsz, seqlen, self.n_local_heads, self.head_dim)
@@ -225,7 +220,8 @@ def _new_attn_forward(self, x: Tensor, freqs_cis: Tensor, mask: Tensor, input_po
 
     y = y.transpose(1, 2).contiguous().view(bsz, seqlen, self.dim)
 
-    y = self.gemv2(y, self.wo.weight, self.thresh_o, self.sparsity_bin) # prefill logic taken care of in gemv
+    y = simulate_splitk(y, self.wo.weight, self.thresh_o, layer_uuid + "y0") # prefill logic taken care of in gemv
+    # y = self.gemv2(y, self.wo.weight, self.thresh_o, self.sparsity_bin) # prefill logic taken care of in gemv
 
     return y
 
@@ -296,7 +292,28 @@ class Attention(nn.Module):
         return y
 
 def _new_ffn_forward(self, x: Tensor) -> Tensor:
-    return self.gemv2(F.silu(self.gemv1(x, self.w1.weight, self.thresh_gate, self.sparsity_bin)) * self.gemv1(x, self.w3.weight, self.thresh_up, self.sparsity_bin), self.w2.weight, self.thresh_down, self.sparsity_bin) 
+
+    N, Z = self.w1.weight.shape
+    beam_width, seq_len, _ = x.shape
+
+    # Adithya
+    # This is the simulation logic for the ffn sparsification matrices.
+    import uuid
+    layer_uuid = str(uuid.uuid4())
+    print(layer_uuid)
+
+    w1 = simulate_splitk(x, self.w1.weight, self.thresh_gate, layer_uuid + "w1")
+    w1_silu = F.silu(w1)
+    w3 = simulate_splitk(x, self.w3.weight, self.thresh_up, layer_uuid + "w3")
+    w2 = simulate_splitk(w1_silu * w3, self.w2.weight, self.thresh_down, layer_uuid + "w2")
+    # Adithya
+
+    # w1 = self.gemv1(x, self.w1.weight, self.thresh_gate, self.sparsity_bin) # orig
+    # w1_silu = F.silu(w1)
+    # w3 = self.gemv1(x, self.w3.weight, self.thresh_up, self.sparsity_bin)
+    # w2 = self.gemv2(w1_silu * w3, self.w2.weight, self.thresh_down, self.sparsity_bin)
+
+    return w2
 
 class FeedForward(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
@@ -304,6 +321,8 @@ class FeedForward(nn.Module):
         self.w1 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w3 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
+        # w1, w1_silu, w3, w2
+        # sparsity: self.ffn_sparsity = nn.Parameter(torch.tensor([0, 0, 0, 0]), requires_grad=False)
 
         self.sparsify = False
 
