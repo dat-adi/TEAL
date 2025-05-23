@@ -1,48 +1,11 @@
 # Training-Free Acivation Sparsity in Large Language Models
 
+
+This is a fork that seeks to retrieve the sparsified input tensors and matrices from TEAL by simulating it in PyTorch.
+For the actual implementation, check out the [main TEAL repository](https://github.com/FasterDecoding/TEAL/).
+
+More Resources:
 [[Paper](https://www.arxiv.org/abs/2408.14690)][[Blog](https://www.together.ai/blog/teal-training-free-activation-sparsity-in-large-language-models)]
-
-
-TEAL induces up to 40-50% model-wide activation sparsity in modern LLMs with minimal degradation, resulting in an up to 1.53-1.8x speedup in single-batch decoding.
-
-<div align="center">
-    <img src="figures/clickbait.png" width="500" height="auto"/>
-  </a>
-</div>
-
-The current release supports:
-- FP16 inference for Llama-2/3 models using uniform sparsities
-- Accuracy evaluation for Llama-2/3 and Mistral models using uniform and block-wise greedy sparsities
-
-
-## News
-
-- [01/2025] 🔥 TEAL is accepted to ICLR 2025 as a Spotlight!
-- [08/2024] 🔥 Arxiv release!
-
-## Abstract
-
-Activation sparsity can enable practical inference speedups in large language models (LLMs) by reducing the compute and memory-movement required for matrix
-multiplications during the forward pass. However, existing methods face limitations that inhibit widespread adoption. Some approaches are tailored towards
-older models with ReLU-based sparsity, while others require extensive continued
-pre-training on up to hundreds of billions of tokens. This paper describes TEAL
-(**T**raining-Fre**e** **A**ctivation Sparsity in **L**LMs), a simple training-free method that
-applies magnitude-based activation sparsity to hidden states throughout the entire
-model. TEAL achieves 40-50% model-wide sparsity with minimal performance
-degradation across Llama-2, Llama-3, and Mistral families, with sizes varying
-from 7B to 70B. We improve existing sparse kernels and demonstrate wall-clock
-decoding speed-ups of up to 1.53× and 1.8× at 40% and 50% model-wide sparsity.
-TEAL is compatible with weight quantization, enabling further efficiency gains.
-
-
-
-## Contents
-
-- [Install](#Install)
-- [Demo](#Demo)
-- [Inference Usage](#Inference-Usage)
-- [Accuracy Usage](#Accuracy-Usage)
-- [Citation](#citation)
 
 ## Install
 
@@ -69,7 +32,7 @@ pip install -e .
 export HF_TOKEN=...
 ```
 
-## Execution
+## Execute
 
 1. Navigate to gpt-fast and export the save path which is where you'd have stored the models:
 
@@ -96,10 +59,6 @@ CUDA_VISIBLE_DEVICES=0 python generate.py \
 Provided that the proxy function `simulate_splitk` is active and being used, this should end up dumping the sparsified input tensors onto your system at different stages of a layer, across 32 layers for 40 inferences.
 
 Modifying the `sparsity` value in the above command will increase/decrease sparsity, while modifying the max new tokens increases/decreases the tokens generated and thus the number of matrices dumped on disk as well.
-
-## Further info
-This is a fork that seeks to retrieve the sparsified input tensors and matrices from TEAL.
-For more options and features, check out the main repository.
 
 ## Citation
 
