@@ -96,6 +96,31 @@ class KVCache(nn.Module):
 
         return k_out, v_out
 
+def simulate_splitk(X, A, threshold, uuid):
+    """Simulates the splitk gemv1 kernel"""
+
+    N, Z = A.shape
+    beam_width, seq_len, _ = X.shape
+
+    Y = torch.empty(beam_width, seq_len, N, device=X.device, dtype=torch.float16)
+    mask = (X.abs() > threshold).float()
+    masked = (X * mask).to(dtype=torch.float16)
+
+    if seq_len == 1:
+        for i in range(mask.shape[1]):
+            input_tensor_c = masked.detach().clone().requires_grad_(False)
+            torch.save(input_tensor_c, f"{uuid}.pt")
+            masked_A = A * masked[0, i]
+            # torch.save(masked_A.detach().clone(), f"{uuid}.pt")
+            Y[0, i] = masked_A.T.sum(axis=0)
+    else:
+        for i in range(mask.shape[1]):
+            masked_A = A * X[0, i]
+            Y[0, i] = masked_A.T.sum(axis=0)
+
+    return Y
+
+
 class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
